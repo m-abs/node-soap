@@ -1,5 +1,3 @@
-
-import * as req from 'request';
 import { HttpClient } from './http';
 
 export interface IHeaders {
@@ -96,6 +94,22 @@ export interface IWsdlBaseOptions {
   forceSoap12Headers?: boolean;
 }
 
+export interface IResponse extends Response {
+  statusCode: number;
+  statusMessage: string;
+  elapsedTime: number;
+
+  requestHeaders: IHeaders;
+  responseHeaders: IHeaders;
+}
+export type IRequestParam = RequestInit & {
+  uri: string;
+  multipart?: any;
+};
+export type IRequestHandler = (options: IRequestParam, callback: (err: any, response?: IResponse, body?: any) => void) => {
+  headers: IHeaders;
+};
+
 /** @deprecated use IOptions */
 export type Option = IOptions;
 export interface IOptions extends IWsdlBaseOptions {
@@ -108,7 +122,7 @@ export interface IOptions extends IWsdlBaseOptions {
   /** provide your own http client that implements request(rurl, data, callback, exheaders, exoptions) */
   httpClient?: HttpClient;
   /** override the request module. */
-  request?: req.RequestAPI<req.Request, req.CoreOptions, req.RequiredUriUrl>;
+  request?: IRequestHandler;
   stream?: boolean;
   // wsdl options that only work for client
   customDeserializer?: any;

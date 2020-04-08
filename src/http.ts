@@ -3,13 +3,15 @@
  * MIT Licensed
  */
 
+import { fetch, Headers } from 'cross-fetch';
 import * as debugBuilder from 'debug';
-import * as httpNtlm from 'httpntlm';
+import * as createHttpError from 'http-errors';
+import * as ntlm from 'httpntlm/ntlm';
 import * as _ from 'lodash';
-import * as req from 'request';
+import { PassThrough } from 'stream';
 import * as url from 'url';
 import * as uuid from 'uuid/v4';
-import { IHeaders, IOptions } from './types';
+import { IHeaders, IOptions, IRequestHandler, IRequestParam, IResponse } from './types';
 
 const debug = debugBuilder('node-soap');
 const VERSION = require('../package.json').version;
@@ -25,7 +27,44 @@ export interface IAttachment {
   body: NodeJS.ReadableStream;
 }
 
-export type Request = req.Request;
+function requestWrapper(options: RequestInit & { uri: string }, callback: (err: any, response?: any, body?: any) => void) {
+  const uri = options.uri;
+  const fetchOptions = Object.assign({}, options);
+  delete fetchOptions.uri;
+
+  const headers = {} as IHeaders;
+
+  const fetchHeaders = new Headers(options.headers);
+  fetchHeaders.forEach((value, key) => headers[key] = value);
+
+  const start = Date.now();
+
+  fetch(uri, fetchOptions)
+    .then((response: IResponse) => {
+      response.statusCode = response.status;
+      response.statusMessage = response.statusText;
+      response.elapsedTime = Date.now() - start;
+      response.requestHeaders = headers;
+      response.responseHeaders = {};
+
+      response.headers.forEach((value, key) => response.responseHeaders[key] = value);
+
+ /*      if (!response.ok) {
+        const err = createHttpError(response.status, response);
+        callback(err, response);
+        return;
+      } */
+
+      callback(null, response, response.body);
+    })
+    .catch((err) => {
+      callback(err);
+    });
+
+  return {
+    headers,
+  };
+}
 
 /**
  * A class representing the http client
@@ -35,11 +74,11 @@ export type Request = req.Request;
  * @constructor
  */
 export class HttpClient {
-  private _request: req.RequestAPI<req.Request, req.CoreOptions, req.Options>;
+  private _request: IRequestHandler;
 
   constructor(options?: IOptions) {
     options = options || {};
-    this._request = options.request || req;
+    this._request = options.request || requestWrapper;
   }
 
   /**
@@ -50,56 +89,61 @@ export class HttpClient {
    * @param {Object} exoptions Extra options
    * @returns {Object} The http request object for the `request` module
    */
-  public buildRequest(rurl: string, data: any, exheaders?: IHeaders, exoptions: IExOptions = {}): any {
+  public buildRequest(rurl: string, data: any, exheaders?: IHeaders, exoptions: IExOptions = {}): IRequestParam {
     const curl = url.parse(rurl);
     const secure = curl.protocol === 'https:';
     const host = curl.hostname;
     const port = parseInt(curl.port, 10);
     const path = [curl.pathname || '/', curl.search || '', curl.hash || ''].join('');
     const method = data ? 'POST' : 'GET';
-    const headers: IHeaders = {
+    const headers = new Headers({
       'User-Agent': 'node-soap/' + VERSION,
       'Accept': 'text/html,application/xhtml+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
       'Accept-Encoding': 'none',
       'Accept-Charset': 'utf-8',
       'Connection': exoptions.forever ? 'keep-alive' : 'close',
       'Host': host + (isNaN(port) ? '' : ':' + port),
-    };
+    });
     const mergeOptions = ['headers'];
     const attachments: IAttachment[] = exoptions.attachments || [];
 
     if (typeof data === 'string' && attachments.length === 0 && !exoptions.forceMTOM) {
-      headers['Content-Length'] = Buffer.byteLength(data, 'utf8');
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      headers.set('Content-Length', Buffer.byteLength(data, 'utf8') + '');
+      headers.set('Content-Type', 'application/x-www-form-urlencoded');
     }
 
     exheaders = exheaders || {};
     for (const attr in exheaders) {
-      headers[attr] = exheaders[attr];
+      headers.set(attr, exheaders[attr]);
     }
 
-    const options: req.Options = {
-      uri: curl,
+    const options: IRequestParam = {
+      uri: rurl,
       method: method,
       headers: headers,
-      followAllRedirects: true,
+      redirect: 'follow',
     };
 
     if (exoptions.forceMTOM || attachments.length > 0) {
       const start = uuid();
       let action = null;
-      if (headers['Content-Type'].indexOf('action') > -1) {
-           for (const ct of headers['Content-Type'].split('; ')) {
+      let contentType = headers.get('content-type');
+      if (contentType.indexOf('action') > -1) {
+           for (const ct of contentType.split('; ')) {
                if (ct.indexOf('action') > -1) {
                     action = ct;
                }
            }
       }
-      headers['Content-Type'] =
+
+      contentType =
         'multipart/related; type="application/xop+xml"; start="<' + start + '>"; start-info="text/xml"; boundary=' + uuid();
       if (action) {
-          headers['Content-Type'] = headers['Content-Type'] + '; ' + action;
+        contentType = contentType + '; ' + action;
       }
+
+      headers.set('Content-Type', contentType);
+
       const multipart: any[] = [{
         'Content-Type': 'application/xop+xml; charset=UTF-8; type="text/xml"',
         'Content-ID': '<' + start + '>',
@@ -140,7 +184,7 @@ export class HttpClient {
    * @param {Object} body The http body
    * @param {Object} The parsed body
    */
-  public handleResponse(req: req.Request, res: req.Response, body: any) {
+  public handleResponse(req: Request, res: Response, body: any) {
     debug('Http response body: %j', body);
     if (typeof body === 'string') {
       // Remove any extra characters that appear before or after the SOAP
@@ -157,45 +201,91 @@ export class HttpClient {
   public request(
     rurl: string,
     data: any,
-    callback: (error: any, res?: any, body?: any) => any,
+    _callback: (error: any, res?: IResponse, body?: any) => any,
     exheaders?: IHeaders,
     exoptions?: IExOptions,
     caller?,
-  ) {
+  ): {
+    headers: IHeaders;
+  } {
+    _callback = _.once(_callback);
+
+    const callback = (error: any, res?: IResponse, body?: any) => {
+      if (error) {
+        _callback(error, res, body);
+
+        return;
+      }
+
+      if (typeof body === 'string') {
+        _callback(null, res, this.handleResponse(null, res, body));
+
+        return;
+      }
+
+      res.text()
+        .catch((err) => _callback(err, res))
+        .then((text) => _callback(null, res, this.handleResponse(null, res, text)));
+    };
+
     const options = this.buildRequest(rurl, data, exheaders, exoptions);
-    let req: req.Request;
+    let req: {
+      headers: IHeaders;
+    };
+
     if (exoptions !== undefined && exoptions.hasOwnProperty('ntlm')) {
       // sadly when using ntlm nothing to return
       // Not sure if this can be handled in a cleaner way rather than an if/else,
       // will to tidy up if I get chance later, patches welcome - insanityinside
       // TODO - should the following be uri?
-      options.url = rurl;
-      httpNtlm[options.method.toLowerCase()](options, (err, res) => {
-        if (err) {
-          return callback(err);
-        }
-        // if result is stream
-        if ( typeof res.body !== 'string') {
-          res.body = res.body.toString();
-        }
-        res.body = this.handleResponse(req, res, res.body);
-        callback(null, res, res.body);
-      });
+      this.ntlmHandshake(rurl, options)
+        .then((auth) => {
+          const headers = new Headers(options.headers);
+          headers.set('Authorization', auth);
+          const ntlmOptions = Object.assign({}, options, {headers});
+
+          this._request(ntlmOptions, callback);
+        })
+        .catch((err) => callback(err));
     } else {
-      req = this._request(options, (err, res, body) => {
-        if (err) {
-          return callback(err);
-        }
-        body = this.handleResponse(req, res, body);
-        callback(null, res, body);
-      });
+      req = this._request(options, callback);
     }
 
     return req;
   }
 
-  public requestStream(rurl: string, data: any, exheaders?: IHeaders, exoptions?: IExOptions, caller?): req.Request {
+  public requestStream(rurl: string, data: any, exheaders?: IHeaders, exoptions?: IExOptions, caller?): PassThrough {
     const options = this.buildRequest(rurl, data, exheaders, exoptions);
-    return this._request(options);
+
+    const stream = new PassThrough();
+    this._request(options, (err, response, body) => {
+      if (err) {
+        stream.emit('error', err);
+        return;
+      }
+
+      if (body instanceof PassThrough) {
+        body.pipe(stream);
+      }
+    });
+
+    return stream;
+  }
+
+  private ntlmHandshake(rurl: string, authOpts: IExOptions) {
+    return fetch(rurl, {
+      headers: {
+        Connection: 'keep-alive',
+        Authorization: ntlm.createType1Message(authOpts),
+      },
+    })
+    .then((response) => response.headers.get('www-authenticate'))
+    .then((auth) => {
+      if (!auth) {
+        throw new Error('Stage 1 NTLM handshake failed.');
+      }
+
+      return ntlm.createType3Message(ntlm.parseType2Message(auth), authOpts);
+    });
   }
 }

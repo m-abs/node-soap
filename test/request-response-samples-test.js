@@ -5,6 +5,7 @@ var fs   = require('fs');
 var glob   = require('glob');
 var http = require('http');
 var path = require('path');
+var _ = require('lodash');
 var timekeeper = require('timekeeper');
 var jsdiff = require('diff');
 require('colors');
@@ -158,24 +159,34 @@ function generateTest(name, methodName, wsdlPath, headerJSON, securityJSON, requ
 }
 
 function cbCaller(client, methodName, requestJSON, responseJSON, responseSoapHeaderJSON, options, done){
+  done = _.once(done);
+
   client[methodName](requestJSON, function(err, json, body, soapHeader){
-    if(requestJSON){
-      if (err) {
-        assert.notEqual('undefined: undefined', err.message);
-        assert.deepEqual(err.root, responseJSON);
-      } else {
-        // assert.deepEqual(json, responseJSON);
-        assert.equal(JSON.stringify(typeof json === 'undefined' ? null : json), JSON.stringify(responseJSON));
-        if(responseSoapHeaderJSON){
-          assert.equal(JSON.stringify(soapHeader), JSON.stringify(responseSoapHeaderJSON));
+    try {
+      if(requestJSON){
+        if (err) {
+          assert.notEqual('undefined: undefined', err.message);
+          assert.deepEqual(err.root, responseJSON);
+        } else {
+          // assert.deepEqual(json, responseJSON);
+          assert.equal(JSON.stringify(typeof json === 'undefined' ? null : json), JSON.stringify(responseJSON));
+          if(responseSoapHeaderJSON){
+            assert.equal(JSON.stringify(soapHeader), JSON.stringify(responseSoapHeaderJSON));
+          }
         }
       }
+
+      done();
+    } catch (err) {
+      debugger;
+      done(err);
     }
-    done();
   }, options);
 }
 
 function promiseCaller(client, methodName, requestJSON, responseJSON, responseSoapHeaderJSON, options, done){
+  done = _.once(done);
+
   client[methodName](requestJSON).then(function(responseArr){
     var json = responseArr[0];
     var body = responseArr[1];
@@ -189,9 +200,14 @@ function promiseCaller(client, methodName, requestJSON, responseJSON, responseSo
       }
     }
   }).catch(function(err) {
-    if(requestJSON){
-      assert.notEqual('undefined: undefined', err.message);
-      assert.deepEqual(err.root, responseJSON);
+    try {
+      if(requestJSON){
+        assert.notEqual('undefined: undefined', err.message);
+        assert.deepEqual(err.root, responseJSON);
+      }
+    } catch (err2) {
+      console.log(err.stack);
+      done(err2);
     }
   }).finally(function() {
     done();

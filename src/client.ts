@@ -8,17 +8,17 @@ import * as BluebirdPromise from 'bluebird';
 import * as concatStream from 'concat-stream';
 import * as debugBuilder from 'debug';
 import { EventEmitter } from 'events';
-import { IncomingHttpHeaders } from 'http';
 import * as _ from 'lodash';
-import * as request from 'request';
 import { v4 as uuid4 } from 'uuid';
-import { HttpClient, Request } from './http';
+import { HttpClient } from './http';
 import { IHeaders, IOptions, ISecurity, SoapMethod } from './types';
 import { findPrefix } from './utils';
 import { WSDL } from './wsdl';
 import { IPort, OperationElement, ServiceElement } from './wsdl/elements';
 
 const debug = debugBuilder('node-soap');
+
+require('formdata-polyfill');
 
 const nonIdentifierChars = /[^a-z$_0-9]/i;
 
@@ -51,9 +51,9 @@ export class Client extends EventEmitter {
   public lastRequest?: string;
   public lastMessage?: string;
   public lastEndpoint?: string;
-  public lastRequestHeaders?: request.Headers;
+  public lastRequestHeaders?: IHeaders;
   public lastResponse?: any;
-  public lastResponseHeaders?: IncomingHttpHeaders;
+  public lastResponseHeaders?: Headers;
   public lastElapsedTime?: number;
 
   private wsdl: WSDL;
@@ -237,7 +237,11 @@ export class Client extends EventEmitter {
         options = temp;
       }
       this._invoke(method, args, location, (error, result, rawResponse, soapHeader, rawRequest) => {
-        callback(error, result, rawResponse, soapHeader, rawRequest);
+        try {
+          callback(error, result, rawResponse, soapHeader, rawRequest);
+        } catch (err) {
+          console.log(err.stack);
+        }
       }, options, extraHeaders);
     };
   }
@@ -265,6 +269,8 @@ export class Client extends EventEmitter {
   }
 
   private _invoke(method: OperationElement, args, location: string, callback, options, extraHeaders) {
+    callback = _.once(callback);
+
     const name = method.$name;
     const input = method.input;
     const output = method.output;
@@ -275,7 +281,7 @@ export class Client extends EventEmitter {
     let encoding = '';
     let message = '';
     let xml: string = null;
-    let req: Request;
+    let req: any;
     let soapAction: string;
     const alias = findPrefix(defs.xmlns, ns);
     let headers: any = {
@@ -333,6 +339,7 @@ export class Client extends EventEmitter {
       try {
         obj = this.wsdl.xmlToObject(body);
       } catch (error) {
+        console.log(error, body);
         //  When the output element cannot be looked up in the wsdl and the body is JSON
         //  instead of sending the error, we pass the body in the response.
         if (!output || !output.$lookupTypes) {
@@ -340,14 +347,19 @@ export class Client extends EventEmitter {
           //  If the response is JSON then return it as-is.
           const json = _.isObject(body) ? body : tryJSONparse(body);
           if (json) {
-            return callback(null, response, json, undefined, xml);
+            callback(null, response, json, undefined, xml);
+            return;
           }
         }
+
         error.response = response;
         error.body = body;
         this.emit('soapError', error, eid);
-        return callback(error, response, body, undefined, xml);
+        callback(error, response, body, undefined, xml);
+
+        return;
       }
+
       return finish(obj, body, response);
     };
 
@@ -513,9 +525,10 @@ export class Client extends EventEmitter {
 
       if (err) {
         callback(err, undefined, undefined, undefined, xml);
-      } else {
-        return parseSync(body, response);
+        return;
       }
+
+      parseSync(body, response);
     }, headers, options, this);
 
     // Added mostly for testability, but possibly useful for debugging
