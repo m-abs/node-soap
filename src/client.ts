@@ -237,11 +237,7 @@ export class Client extends EventEmitter {
         options = temp;
       }
       this._invoke(method, args, location, (error, result, rawResponse, soapHeader, rawRequest) => {
-        try {
-          callback(error, result, rawResponse, soapHeader, rawRequest);
-        } catch (err) {
-          console.log(err.stack);
-        }
+        callback(error, result, rawResponse, soapHeader, rawRequest);
       }, options, extraHeaders);
     };
   }
@@ -339,7 +335,6 @@ export class Client extends EventEmitter {
       try {
         obj = this.wsdl.xmlToObject(body);
       } catch (error) {
-        console.log(error, body);
         //  When the output element cannot be looked up in the wsdl and the body is JSON
         //  instead of sending the error, we pass the body in the response.
         if (!output || !output.$lookupTypes) {
@@ -524,7 +519,7 @@ export class Client extends EventEmitter {
       this.emit('response', body, response, eid);
 
       if (err) {
-        callback(err, undefined, undefined, undefined, xml);
+        callback(err, undefined, body, undefined, xml);
         return;
       }
 

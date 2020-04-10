@@ -206,7 +206,6 @@ function promiseCaller(client, methodName, requestJSON, responseJSON, responseSo
         assert.deepEqual(err.root, responseJSON);
       }
     } catch (err2) {
-      console.log(err.stack);
       done(err2);
     }
   }).finally(function() {
