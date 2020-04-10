@@ -3,7 +3,8 @@
  * MIT Licensed
  */
 
-import { fetch, Headers } from 'cross-fetch';
+import AbortController from 'abort-controller';
+import { fetch, Headers, Request } from 'cross-fetch';
 import * as debugBuilder from 'debug';
 import * as createHttpError from 'http-errors';
 import * as ntlm from 'httpntlm/ntlm';
@@ -11,7 +12,7 @@ import * as _ from 'lodash';
 import { PassThrough } from 'stream';
 import * as url from 'url';
 import * as uuid from 'uuid/v4';
-import { IHeaders, IOptions, IRequestHandler, IRequestParam, IResponse } from './types';
+import { IHeaders, IOptions, IRequest, IRequestHandler, IRequestInit, IResponse } from './types';
 
 const debug = debugBuilder('node-soap');
 const VERSION = require('../package.json').version;
@@ -27,9 +28,11 @@ export interface IAttachment {
   body: NodeJS.ReadableStream;
 }
 
-function requestWrapper(options: RequestInit & { uri: string }, callback: (err: any, response?: any, body?: any) => void) {
+function requestWrapper(options: IRequestInit, callback: (err: any, response?: any, body?: any) => void): IRequest {
   const uri = options.uri;
-  const fetchOptions = Object.assign({}, options);
+  const abort = new AbortController();
+  const signal = abort.signal;
+  const fetchOptions = Object.assign({ signal }, options);
   delete fetchOptions.uri;
 
   const headers = {} as IHeaders;
@@ -39,8 +42,10 @@ function requestWrapper(options: RequestInit & { uri: string }, callback: (err: 
 
   const start = Date.now();
 
+  const request = new Request(uri, fetchOptions) as IRequest;
+
   fetch(uri, fetchOptions)
-    .then((response: IResponse) => {
+    .then(async (response: IResponse) => {
       response.statusCode = response.status;
       response.statusMessage = response.statusText;
       response.elapsedTime = Date.now() - start;
@@ -49,21 +54,24 @@ function requestWrapper(options: RequestInit & { uri: string }, callback: (err: 
 
       response.headers.forEach((value, key) => response.responseHeaders[key] = value);
 
- /*      if (!response.ok) {
-        const err = createHttpError(response.status, response);
-        callback(err, response);
-        return;
-      } */
+      const body = options.stream ? response.body : await response.text();
+      if (!response.ok) {
+       const err = createHttpError(response.status, response);
+       callback(err, response, body);
+       return;
+      }
 
-      callback(null, response, response.body);
+      callback(null, response, body);
     })
     .catch((err) => {
       callback(err);
     });
 
-  return {
-    headers,
+  request.cancel = () => {
+    abort.abort();
   };
+
+  return request;
 }
 
 /**
@@ -89,7 +97,7 @@ export class HttpClient {
    * @param {Object} exoptions Extra options
    * @returns {Object} The http request object for the `request` module
    */
-  public buildRequest(rurl: string, data: any, exheaders?: IHeaders, exoptions: IExOptions = {}): IRequestParam {
+  public buildRequest(rurl: string, data: any, exheaders?: IHeaders, exoptions: IExOptions = {}): IRequestInit {
     const curl = url.parse(rurl);
     const secure = curl.protocol === 'https:';
     const host = curl.hostname;
@@ -117,10 +125,10 @@ export class HttpClient {
       headers.set(attr, exheaders[attr]);
     }
 
-    const options: IRequestParam = {
+    const options: IRequestInit = {
       uri: rurl,
-      method: method,
-      headers: headers,
+      method,
+      headers,
       redirect: 'follow',
     };
 
@@ -205,9 +213,7 @@ export class HttpClient {
     exheaders?: IHeaders,
     exoptions?: IExOptions,
     caller?,
-  ): {
-    headers: IHeaders;
-  } {
+  ): IRequest {
     _callback = _.once(_callback);
 
     const callback = (error: any, res?: IResponse, body?: any) => {
@@ -229,9 +235,7 @@ export class HttpClient {
     };
 
     const options = this.buildRequest(rurl, data, exheaders, exoptions);
-    let req: {
-      headers: IHeaders;
-    };
+    let req: IRequest;
 
     if (exoptions !== undefined && exoptions.hasOwnProperty('ntlm')) {
       // sadly when using ntlm nothing to return

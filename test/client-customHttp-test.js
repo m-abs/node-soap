@@ -70,9 +70,6 @@ it('should allow customization of httpClient and the wsdl file download should p
       body = self.handleResponse(req, res, body);
       callback(null, res, body);
     });
-    if (headers.get('connection') !== 'keep-alive') {
-      req.end(data);
-    }
     return req;
   };
   

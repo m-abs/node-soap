@@ -1,4 +1,11 @@
+import { Request } from 'cross-fetch';
 import { HttpClient } from './http';
+
+export { Request };
+
+export interface IRequest extends Request {
+  cancel(): void;
+}
 
 export interface IHeaders {
   [k: string]: any;
@@ -21,6 +28,13 @@ export interface ISoapFaultError {
 }
 
 export type ISoapFault = ISoapFault11 | ISoapFault12;
+
+export interface IRequestInit extends RequestInit {
+  uri: string;
+  stream?: boolean;
+  multipart?: any[];
+  agent?: any;
+}
 
 // SOAP Fault 1.1
 export interface ISoapFault11 {
@@ -102,13 +116,7 @@ export interface IResponse extends Response {
   requestHeaders: IHeaders;
   responseHeaders: IHeaders;
 }
-export type IRequestParam = RequestInit & {
-  uri: string;
-  multipart?: any;
-};
-export type IRequestHandler = (options: IRequestParam, callback: (err: any, response?: IResponse, body?: any) => void) => {
-  headers: IHeaders;
-};
+export type IRequestHandler = (options: IRequestInit, callback: (err: any, response?: IResponse, body?: any) => void) => IRequest;
 
 /** @deprecated use IOptions */
 export type Option = IOptions;

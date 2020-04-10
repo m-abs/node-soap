@@ -7,6 +7,7 @@
   },
   "author": "Vinay Pulim <v@pulim.com>",
   "dependencies": {
+    "abort-controller": "^3.0.0",
     "bluebird": "^3.5.0",
     "concat-stream": "^2.0.0",
     "cross-fetch": "^3.0.4",

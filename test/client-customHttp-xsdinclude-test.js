@@ -54,9 +54,6 @@ it('should allow customization of httpClient, the wsdl file, and associated data
       body = self.handleResponse(req, res, body);
       callback(null, res, body);
     });
-    if (headers.Connection !== 'keep-alive') {
-      req.end(data);
-    }
     return req;
   };
 
