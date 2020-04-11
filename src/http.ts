@@ -9,11 +9,12 @@ import * as debugBuilder from 'debug';
 import * as createHttpError from 'http-errors';
 import * as ntlm from 'httpntlm/ntlm';
 import * as _ from 'lodash';
-import { PassThrough } from 'stream';
+import { PassThrough, Stream } from 'stream';
 import * as url from 'url';
 import * as uuid from 'uuid/v4';
 import { IHeaders, IOptions, IRequest, IRequestHandler, IRequestInit, IResponse } from './types';
 
+const CombinedStream = require('combined-stream');
 const debug = debugBuilder('node-soap');
 const VERSION = require('../package.json').version;
 
@@ -28,11 +29,70 @@ export interface IAttachment {
   body: NodeJS.ReadableStream;
 }
 
+function handleMultiplat(options: IRequestInit) {
+  if (!options.multipart || !options.multipart.length) {
+    return options;
+  }
+
+  let boundary = uuid();
+  const headers = new Headers(options.headers);
+  const isChunked = headers.get('transfer-encoding') === 'chunked' || options.multipart.some((m) => m.body instanceof Stream);
+
+  if (isChunked && !headers.has('transfer-encoding')) {
+    headers.set('transfer-encoding', 'chunked');
+  }
+
+  let contentType = headers.get('content-type');
+  if (!contentType || !contentType.includes('multipart')) {
+    contentType = `multipart/related; boundary=${boundary}`;
+  } else {
+    if (contentType.indexOf('boundary') !== -1) {
+      boundary = contentType.replace(/.*boundary=([^\s;]+).*/, '$1');
+    } else {
+      headers.set('content-type', `${contentType}; boundary=${boundary}`);
+    }
+  }
+
+  const body = isChunked ? new CombinedStream() : [];
+
+  function append(data: any) {
+    if (isChunked) {
+      body.append(data);
+    } else {
+      body.push(Buffer.from(data));
+    }
+  }
+
+  const newLn = '\r\n';
+
+  for (const part of options.multipart) {
+    let preamble = `--${boundary}${newLn}`;
+
+    for (const key of Object.keys(part)) {
+      if (key === 'body') {
+        continue;
+      }
+
+      preamble += `${key}: ${part[key]}${newLn}`;
+    }
+
+    preamble += newLn;
+
+    append(preamble);
+    append(part.body);
+    append(newLn);
+  }
+
+  append(`--${boundary}--`);
+
+  return Object.assign({}, options, { body, headers });
+}
+
 function requestWrapper(options: IRequestInit, callback: (err: any, response?: any, body?: any) => void): IRequest {
   const uri = options.uri;
   const abort = new AbortController();
   const signal = abort.signal;
-  const fetchOptions = Object.assign({ signal }, options);
+  const fetchOptions = handleMultiplat(Object.assign({ signal }, options));
   delete fetchOptions.uri;
 
   const headers = {} as IHeaders;

@@ -9,6 +9,7 @@
   "dependencies": {
     "abort-controller": "^3.0.0",
     "bluebird": "^3.5.0",
+    "combined-stream": "^1.0.8",
     "concat-stream": "^2.0.0",
     "cross-fetch": "^3.0.4",
     "debug": "^4.1.1",
